@@ -1,0 +1,6 @@
+{
+    "real_width": 3.0,
+    "focal_length": 630.0,
+    "x_line_left": 480,
+    "x_line_right": 640
+}

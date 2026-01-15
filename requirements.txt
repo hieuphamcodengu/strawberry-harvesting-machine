@@ -1,6 +1,8 @@
 # Computer Vision & Deep Learning
 opencv-python==4.8.1.78
 ultralytics==8.0.196
+torch==2.0.1
+torchvision==0.15.2
 
 # GUI
 Pillow==10.0.0
@@ -8,11 +10,9 @@ Pillow==10.0.0
 # Serial Communication
 pyserial==3.5
 
-# Data Processing
-numpy>=1.24.0
+# Data Processing (MUST use NumPy 1.x for compatibility)
+numpy>=1.24.0,<2.0.0
 
 # Additional dependencies (installed with ultralytics)
-# torch
-# torchvision
 # PyYAML
 # matplotlib

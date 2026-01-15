@@ -43,10 +43,10 @@ float v2Prev_M2 = 0;
 float eintegral_M2 = 0;
 
 // Thông số PID và Ramping (có thể điều chỉnh)
-float kp = 1.4;        // Hệ số tỷ lệ
-float ki = 1.1;        // Hệ số tích phân
-float kd = 0.02;       // Hệ số đạo hàm
-float rampRate = 20.0; // RPM/giây - tốc độ tăng target
+float kp = 2;        // Hệ số tỷ lệ
+float ki = 1.7;        // Hệ số tích phân
+float kd = 0.1;       // Hệ số đạo hàm
+float rampRate = 30.0; // RPM/giây - tốc độ tăng target
 
 void setup_motor() {
   // Cấu hình chân điều khiển động cơ
@@ -70,7 +70,7 @@ void setup_motor() {
 void M1(float target) {
   // Soft-start: tăng target dần dần để tránh vọt
   static float smoothTarget_M1 = 0;
-  //float rampRate = 40.0; // RPM/giây - tăng để bắt target nhanh hơn
+  float rampRate = 40.0; // RPM/giây - tăng để bắt target nhanh hơn
   
   // read the position in an atomic block
   // to avoid potential misreads
@@ -138,7 +138,7 @@ void M1(float target) {
 void M2(float target) {
   // Soft-start: tăng target dần dần để tránh vọt
   static float smoothTarget_M2 = 0;
-  //float rampRate = 40.0; // RPM/giây - tăng để bắt target nhanh hơn
+  float rampRate = 40.0; // RPM/giây - tăng để bắt target nhanh hơn
   
   // read the position in an atomic block
   // to avoid potential misreads

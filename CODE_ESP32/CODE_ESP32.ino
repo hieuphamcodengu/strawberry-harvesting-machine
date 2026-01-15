@@ -402,7 +402,7 @@ void performCut() {
   unsigned long currentTime = millis();
   
   targetAngle1 = 81;
-  targetAngle2 = 75;
+  targetAngle2 = 65;
   servo1Time = currentTime;
   servo2Time = currentTime + 1000;
   servo1Moving = false;
@@ -436,7 +436,7 @@ void handleServo() {
   if(ps2x.Button(PSB_R1) && !lastR1) { 
     // Phát hiện nhấn R1 lần đầu
     targetAngle1 = 81;
-    targetAngle2 = 75;
+    targetAngle2 = 65;
     servo1Time = currentTime;
     servo2Time = currentTime + 1000; // Servo 2 chờ 1s
     servo1Moving = false; // Servo 1 không cần chờ
@@ -513,8 +513,8 @@ void read_PS2() {
   // ===== ĐIỀU KHIỂN ĐỘNG CƠ DC =====
   // PSB_L1: Quay thuận (IN1=HIGH, IN2=LOW, PWM=50)
   if(ps2x.Button(PSB_L1)) {
-    digitalWrite(DC_MOTOR_IN1, HIGH);
-    digitalWrite(DC_MOTOR_IN2, LOW);
+    digitalWrite(DC_MOTOR_IN1, LOW );
+    digitalWrite(DC_MOTOR_IN2, HIGH);
     analogWrite(DC_MOTOR_PWM, 130);
     Serial.println("[DC Motor] Quay thuan - PWM=100");
   }

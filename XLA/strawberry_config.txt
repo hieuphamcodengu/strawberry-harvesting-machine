@@ -1,16 +1,6 @@
 {
     "real_width": 3.0,
     "focal_length": 330.0,
-    "x_line_left": 200,
-    "x_line_right": 380,
-    "conf_threshold": 0.5,
-    "iou_threshold": 0.45,
-    "brightness": 0,
-    "show_distance": true,
-    "show_coordinates": true,
-    "flip_horizontal": true,
-    "tracking_enabled": true,
-    "show_target_zone": true,
-    "auto_stop_enabled": true,
-    "current_camera": 0
+    "x_line_left": 250,
+    "x_line_right": 380
 }

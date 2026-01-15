@@ -50,7 +50,7 @@ class StrawberryDetectorApp:
         self.image_height = 480  # Chiều cao ảnh
         
         # Object tracking
-        self.tracking_enabled = True  # Bật tracking để bám đối tượng
+        self.tracking_method = "bytetrack"  # Tracking method: "bytetrack", "deepsort", "none"
         
         # Serial communication
         self.serial_port = None
@@ -63,7 +63,7 @@ class StrawberryDetectorApp:
         self.coord_to_send = None       # Tọa độ từ detection (để hiển thị)
         self.saved_coord_for_auto = None  # Tọa độ đã save từ input để gửi auto
         self.last_debug_time = 0        # Thời điểm in debug lần cuối (throttle spam)
-        self.last_detected_coords = None  # Lưu tọa độ phát hiện cuối (X, Y, Z) cho test cut
+        self.last_detected_coords = None  # Lưu tọa độ phát hiện cuối (X, Y, Z, class) cho test cut
         
         # Config file
         self.config_file = "strawberry_config.txt"
@@ -279,14 +279,32 @@ class StrawberryDetectorApp:
                                     selectcolor='#2b2b2b', font=('Arial', 9))
         coord_check.pack(anchor=tk.W, pady=5)
         
-        # Toggle tracking
-        self.tracking_var = tk.BooleanVar(value=True)
-        tracking_check = tk.Checkbutton(dist_frame, text="🎯 Enable Tracking (ByteTrack)", 
-                                       variable=self.tracking_var,
-                                       command=lambda: setattr(self, 'tracking_enabled', self.tracking_var.get()),
-                                       bg='#1e1e1e', fg='#cccccc', 
-                                       selectcolor='#2b2b2b', font=('Arial', 9))
-        tracking_check.pack(anchor=tk.W, pady=5)
+        # Tracking method selection
+        tk.Label(dist_frame, text="🎯 Object Tracking:", 
+                bg='#1e1e1e', fg='#cccccc', font=('Arial', 9, 'bold')).pack(anchor=tk.W, pady=(5, 2))
+        
+        self.tracking_var = tk.StringVar(value="bytetrack")
+        
+        track_frame = tk.Frame(dist_frame, bg='#1e1e1e')
+        track_frame.pack(anchor=tk.W, padx=10, pady=2)
+        
+        tk.Radiobutton(track_frame, text="ByteTrack (Fast)", 
+                      variable=self.tracking_var, value="bytetrack",
+                      command=lambda: setattr(self, 'tracking_method', 'bytetrack'),
+                      bg='#1e1e1e', fg='#cccccc', selectcolor='#2b2b2b', 
+                      font=('Arial', 9)).pack(anchor=tk.W)
+        
+        tk.Radiobutton(track_frame, text="DeepSORT (Accurate)", 
+                      variable=self.tracking_var, value="deepsort",
+                      command=lambda: setattr(self, 'tracking_method', 'deepsort'),
+                      bg='#1e1e1e', fg='#cccccc', selectcolor='#2b2b2b', 
+                      font=('Arial', 9)).pack(anchor=tk.W)
+        
+        tk.Radiobutton(track_frame, text="No Tracking", 
+                      variable=self.tracking_var, value="none",
+                      command=lambda: setattr(self, 'tracking_method', 'none'),
+                      bg='#1e1e1e', fg='#cccccc', selectcolor='#2b2b2b', 
+                      font=('Arial', 9)).pack(anchor=tk.W)
         
         # Real width input
         width_frame = tk.Frame(dist_frame, bg='#1e1e1e')
@@ -414,7 +432,7 @@ class StrawberryDetectorApp:
             "show_distance": self.show_distance,
             "show_coordinates": self.show_coordinates,
             "flip_horizontal": self.flip_horizontal,
-            "tracking_enabled": self.tracking_enabled,
+            "tracking_method": self.tracking_method,
             "show_target_zone": self.show_target_zone,
             "auto_stop_enabled": self.auto_stop_enabled,
             "current_camera": self.current_camera
@@ -459,7 +477,7 @@ class StrawberryDetectorApp:
                 self.show_distance = config.get("show_distance", True)
                 self.show_coordinates = config.get("show_coordinates", True)
                 self.flip_horizontal = config.get("flip_horizontal", True)
-                self.tracking_enabled = config.get("tracking_enabled", True)
+                self.tracking_method = config.get("tracking_method", "bytetrack")
                 self.show_target_zone = config.get("show_target_zone", True)
                 self.auto_stop_enabled = config.get("auto_stop_enabled", False)
                 self.current_camera = config.get("current_camera", 0)
@@ -789,7 +807,16 @@ class StrawberryDetectorApp:
                             # Kiểm tra harvest complete từ ESP32
                             elif data == "HARVEST_DONE#":
                                 self.log_message("✅ [HARVEST] COMPLETE! Strawberry harvested successfully!", "green")
-                                # Có thể thêm âm thanh hoặc notification ở đây
+                                # Tự động tiếp tục test mode - reset cờ và gửi T# lại
+                                if self.test_mode_active:
+                                    self.log_message("[AUTO] Continuing to next strawberry...", "cyan")
+                                    self.auto_stop_sent = False  # Reset để có thể dừng lại cho quả tiếp theo
+                                    # Gửi T# để tiếp tục di chuyển
+                                    try:
+                                        self.serial_port.write("T#".encode())
+                                        self.log_message("[AUTO] Sent T# - Moving to find next strawberry", "green")
+                                    except Exception as e:
+                                        self.log_message(f"[ERROR] Failed to continue: {str(e)}", "red")
                             else:
                                 self.log_message(f"[ESP32] {data}", "white")
                     time.sleep(0.05)
@@ -861,7 +888,8 @@ class StrawberryDetectorApp:
         # Gửi lệnh T# 1 lần duy nhất
         try:
             self.serial_port.write("T#".encode())
-            self.log_message("[TEST MODE] Started - Sent T# (ESP32 will handle continuous forward)", "green")
+            self.log_message("[TEST MODE] Started - Continuous harvesting mode activated", "green")
+            self.log_message("[INFO] Robot will harvest all Ripe strawberries until STOP pressed", "cyan")
         except Exception as e:
             self.log_message(f"[ERROR] Failed to send T#: {str(e)}", "red")
             self.test_mode_active = False
@@ -871,10 +899,11 @@ class StrawberryDetectorApp:
     def stop_test_mode(self):
         """Dừng test mode"""
         self.test_mode_active = False
+        self.auto_stop_sent = False  # Reset cờ
         self.start_test_btn.config(state=tk.NORMAL)
         self.stop_test_btn.config(state=tk.DISABLED)
         
-        self.log_message("[TEST MODE] Stopped", "yellow")
+        self.log_message("[TEST MODE] Stopped - Continuous harvesting ended", "yellow")
         
         # Gửi lệnh dừng
         if self.serial_port and self.serial_port.is_open:
@@ -890,13 +919,62 @@ class StrawberryDetectorApp:
             self.log_message("[ERROR] No strawberry detected! Run camera first.", "red")
             return
         
-        X, Y, Z = self.last_detected_coords
+        X, Y, Z, cls = self.last_detected_coords
+        
+        # Kiểm tra chỉ cắt quả Ripe (class 0), bỏ qua Unripe (class 1)
+        if cls != 0:
+            class_name = self.class_names.get(cls, 'Unknown')
+            self.log_message(f"[SKIP] Berry is {class_name} - Only harvest Ripe strawberries", "yellow")
+            self.log_message(f"[INFO] Skipped berry at X={X:.1f}, Y={Y:.1f}, Z={Z:.1f}cm", "cyan")
+            
+            # Tự động tiếp tục nếu đang trong test mode
+            if self.test_mode_active:
+                self.auto_stop_sent = False  # Reset để có thể dừng lại cho quả tiếp theo
+                self.log_message("[AUTO] Continuing to find next Ripe strawberry...", "green")
+                try:
+                    self.serial_port.write("T#".encode())
+                    self.log_message("[AUTO] Sent T# - Moving forward", "cyan")
+                except Exception as e:
+                    self.log_message(f"[ERROR] Failed to continue: {str(e)}", "red")
+            return
         # Chuyển đổi tọa độ camera → tool (tính từ vị trí mặc định Z=100mm, Y=10mm)
         # Y_cam (cm) → Z_tool (mm): Y*10 + 100 (offset) + 100 (default) = Y*10 + 200
         # Z_cam (cm) → Y_tool (mm): Z*10 - 20 (offset cắt)
-        Z_tool = int(Y * 10 + 200)  # Y của dâu → Z của tool (tuyệt đối)
+        Z_tool = int(Y * 10 + 195)  # Y của dâu → Z của tool (tuyệt đối)
         Y_tool = int(Z * 10 - 40)   # Z của dâu → Y của tool (tuyệt đối)
         
+        # Kiểm tra giới hạn tool (Z max: 150mm, Y max: 300mm)
+        if Z_tool > 150 or Z_tool < 0:
+            self.log_message(f"[WARNING] Z_tool={Z_tool}mm out of range [0-150mm] - SKIPPED", "red")
+            self.log_message(f"[SKIP] Berry at X={X:.1f}, Y={Y:.1f}, Z={Z:.1f}cm is unreachable", "yellow")
+            
+            # Tự động tiếp tục nếu đang trong test mode
+            if self.test_mode_active:
+                self.auto_stop_sent = False  # Reset để có thể dừng lại cho quả tiếp theo
+                self.log_message("[AUTO] Continuing to find reachable strawberry...", "green")
+                try:
+                    self.serial_port.write("T#".encode())
+                    self.log_message("[AUTO] Sent T# - Moving forward", "cyan")
+                except Exception as e:
+                    self.log_message(f"[ERROR] Failed to continue: {str(e)}", "red")
+            return
+        
+        if Y_tool > 300 or Y_tool < 0:
+            self.log_message(f"[WARNING] Y_tool={Y_tool}mm out of range [0-300mm] - SKIPPED", "red")
+            self.log_message(f"[SKIP] Berry at X={X:.1f}, Y={Y:.1f}, Z={Z:.1f}cm is unreachable", "yellow")
+            
+            # Tự động tiếp tục nếu đang trong test mode
+            if self.test_mode_active:
+                self.auto_stop_sent = False  # Reset để có thể dừng lại cho quả tiếp theo
+                self.log_message("[AUTO] Continuing to find reachable strawberry...", "green")
+                try:
+                    self.serial_port.write("T#".encode())
+                    self.log_message("[AUTO] Sent T# - Moving forward", "cyan")
+                except Exception as e:
+                    self.log_message(f"[ERROR] Failed to continue: {str(e)}", "red")
+            return
+        
+        # Tọa độ hợp lệ - gửi lệnh
         coord_cmd = f"G{Z_tool},{Y_tool}#"
         self.send_command(coord_cmd)
         self.log_message(f"[TEST CUT] Berry coords: X={X:.1f}, Y={Y:.1f}, Z={Z:.1f}cm", "cyan")
@@ -1036,8 +1114,8 @@ class StrawberryDetectorApp:
                 if self.brightness != 0:
                     frame = cv2.convertScaleAbs(frame, alpha=1, beta=self.brightness)
                 
-                # Detect với tracking nếu enabled
-                if self.tracking_enabled:
+                # Detect với tracking method đã chọn
+                if self.tracking_method == "bytetrack":
                     results = self.model.track(frame, 
                                              imgsz=640,
                                              conf=self.conf_threshold,
@@ -1045,7 +1123,15 @@ class StrawberryDetectorApp:
                                              persist=True,  # Giữ track ID giữa các frame
                                              tracker="bytetrack.yaml",  # ByteTrack tracker
                                              verbose=False)
-                else:
+                elif self.tracking_method == "deepsort":
+                    results = self.model.track(frame, 
+                                             imgsz=640,
+                                             conf=self.conf_threshold,
+                                             iou=self.iou_threshold,
+                                             persist=True,  # Giữ track ID giữa các frame
+                                             tracker="botsort.yaml",  # BotSORT (DeepSORT-based)
+                                             verbose=False)
+                else:  # tracking_method == "none"
                     results = self.model.predict(frame, 
                                                imgsz=640,
                                                conf=self.conf_threshold, 
@@ -1159,8 +1245,8 @@ class StrawberryDetectorApp:
                             # Tính tọa độ 3D
                             X, Y, Z = self.calculate_3d_coordinates(center_x, center_y, distance)
                             
-                            # Lưu tọa độ cuối cùng cho test cut
-                            self.last_detected_coords = (X, Y, Z)
+                            # Lưu tọa độ cuối cùng và class cho test cut
+                            self.last_detected_coords = (X, Y, Z, cls)
                             
                             # Vẽ tọa độ bên dưới box (2 dòng)
                             coord_text1 = f"X:{X:+.1f} Y:{Y:+.1f}"
@@ -1206,9 +1292,7 @@ class StrawberryDetectorApp:
                             print("[DEBUG] Sending D# command...")
                             self.send_command("D#")  # Gửi lệnh dừng
                             self.auto_stop_sent = True  # Đánh dấu đã gửi
-                            self.test_mode_active = False  # Tắt test mode
-                            self.start_test_btn.config(state=tk.NORMAL)
-                            self.stop_test_btn.config(state=tk.DISABLED)
+                            # KHÔNG TẮT test_mode_active - để tiếp tục thu hoạch sau HARVEST_DONE#
                             self.log_message("[AUTO STOP] Target in zone - Sent D#", "yellow")
                             
                             # Lưu thời điểm để gọi test_cut_strawberry sau 1s
@@ -1216,8 +1300,9 @@ class StrawberryDetectorApp:
                             
                             # Log: sẽ tự động gọi hàm cắt dâu sau 1s
                             if self.last_detected_coords:
-                                X, Y, Z = self.last_detected_coords
-                                print(f"[DEBUG] Will auto-cut strawberry after 1s: Berry coords X={X:.1f}, Y={Y:.1f}, Z={Z:.1f}cm")
+                                X, Y, Z, cls = self.last_detected_coords
+                                class_name = self.class_names.get(cls, 'Unknown')
+                                print(f"[DEBUG] Will auto-cut strawberry after 1s: Berry coords X={X:.1f}, Y={Y:.1f}, Z={Z:.1f}cm, Class={class_name}")
                             else:
                                 print("[DEBUG] No detected coordinates - will NOT auto-cut")
                             

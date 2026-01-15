@@ -68,7 +68,8 @@ enum HarvestState {
   HARVEST_WAIT_MOVE1, // Chờ Nano_1 di chuyển đến tọa độ dâu
   HARVEST_CUT,        // Thực hiện cắt dâu
   HARVEST_WAIT_MOVE2, // Chờ Nano_1 di chuyển về khay
-  HARVEST_RELEASE     // Thả dâu
+  HARVEST_RELEASE,    // Thả dâu
+  HARVEST_WAIT_RETURN // Chờ Nano_1 về vị trí chờ
 };
 
 HarvestState harvestState = HARVEST_IDLE;
@@ -378,7 +379,7 @@ void handleHarvestSequence() {
     case HARVEST_RELEASE:
       // Chờ servo thả xong (2s)
       if (millis() - servoStartTime >= 2500) {
-        Serial.println("[HARVEST] ✅ HARVEST SEQUENCE COMPLETE!");
+        Serial.println("[HARVEST] Release complete - Moving to wait position");
         
         // Mở gắp khi về vị trí chờ
         performRelease();
@@ -386,14 +387,38 @@ void handleHarvestSequence() {
         // Gửi lệnh về vị trí chờ: Z=100mm, Y=10mm
         String waitCmd = "100,10#";
         Serial1.print(waitCmd);
-        Serial.println("[HARVEST] Moving to wait position: Z=100mm, Y=10mm (gripper open)");
+        Serial.println("[HARVEST] Sent to Nano_1: 100,10# (return to wait position)");
         
-        // Gửi thông báo về PC
-        Serial.println("HARVEST_DONE#");
+        // Chuyển sang state chờ Nano_1 hoàn thành
+        harvestState = HARVEST_WAIT_RETURN;
+      }
+      break;
+      
+    case HARVEST_WAIT_RETURN:
+      // Chờ Nano_1 gửi DONE# sau khi về vị trí chờ
+      if (nano1ResponseReady) {
+        nano1Buffer.trim();
+        nano1Buffer.toUpperCase();
         
-        // Reset state
-        harvestState = HARVEST_IDLE;
-        currentZ = 0;
+        Serial.print("[HARVEST] Received response: '");
+        Serial.print(nano1Buffer);
+        Serial.println("'");
+        
+        if (nano1Buffer.indexOf("DONE") >= 0) {
+          Serial.println("[HARVEST] ✅ RETURNED TO WAIT POSITION - HARVEST COMPLETE!");
+          
+          // Gửi thông báo về PC (bây giờ mới gửi)
+          Serial.println("HARVEST_DONE#");
+          
+          // Reset state
+          harvestState = HARVEST_IDLE;
+          currentZ = 0;
+        } else {
+          Serial.println("[HARVEST] WARNING: Expected DONE but got something else");
+        }
+        
+        nano1Buffer = "";
+        nano1ResponseReady = false;
       }
       break;
   }
@@ -429,14 +454,14 @@ void performCut() {
   unsigned long currentTime = millis();
   
   targetAngle1 = 81;
-  targetAngle2 = 65;
+  targetAngle2 = 55;
   servo1Time = currentTime;
   servo2Time = currentTime + 1000;
   servo1Moving = false;
   servo2Moving = true;
   
   srv1.write(targetAngle1);
-  Serial.println("[CUT] Servo1=81° (immediate), Servo2=75° (after 1s)");
+  Serial.println("[CUT] Servo1=81° (immediate), Servo2=55° (after 1s)");
 }
 
 void performRelease() {
@@ -463,7 +488,7 @@ void handleServo() {
   if(ps2x.Button(PSB_R1) && !lastR1) { 
     // Phát hiện nhấn R1 lần đầu
     targetAngle1 = 81;
-    targetAngle2 = 65;
+    targetAngle2 = 55;
     servo1Time = currentTime;
     servo2Time = currentTime + 1000; // Servo 2 chờ 1s
     servo1Moving = false; // Servo 1 không cần chờ
@@ -604,17 +629,17 @@ void read_PS2() {
   if(ps2x.Button(PSB_PAD_UP)) {
     // Tiến: cả 2 động cơ tiến (dir=1), rpm=50
     send_M1_M2[0] = 1; // dir_L = 1
-    send_M1_M2[1] = 50; // rpm_L = 50
+    send_M1_M2[1] = 15; // rpm_L = 50
     send_M1_M2[2] = 1; // dir_R = 1
-    send_M1_M2[3] = 50; // rpm_R = 50
+    send_M1_M2[3] = 15; // rpm_R = 50
     Serial.println("Command: TIEN");
   }
   else if(ps2x.Button(PSB_PAD_DOWN)) {
     // Lùi: cả 2 động cơ lùi (dir=2), rpm=50
     send_M1_M2[0] = 2; // dir_L = 2
-    send_M1_M2[1] = 50; // rpm_L = 50
+    send_M1_M2[1] = 15; // rpm_L = 50
     send_M1_M2[2] = 2; // dir_R = 2
-    send_M1_M2[3] = 50; // rpm_R = 50
+    send_M1_M2[3] = 15; // rpm_R = 50
     Serial.println("Command: LUI");
   }
   else if(ps2x.Button(PSB_PAD_LEFT)) {
@@ -638,7 +663,7 @@ void read_PS2() {
   // Nếu PC control active hoặc đang chờ sau PC stop, không gửi lệnh từ PS2
   if (pcControlActive) {
     // PC đang điều khiển - gửi lệnh tiến liên tục
-    String wheelString = "1,50,1,50#";  // Tiến, RPM=50
+    String wheelString = "1,11,1,11#";  // Tiến, RPM=20
     Serial2.print(wheelString);
     // Không gửi lệnh stepper
     delay(50);

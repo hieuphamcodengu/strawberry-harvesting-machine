@@ -155,6 +155,10 @@ void loop() {
   
   // Xử lý harvest state machine
   handleHarvestSequence();
+  
+  // Xử lý servo timing (PHẢI chạy dù không có PS2)
+  updateServoTiming();
+  
     // Kiểm tra nếu đang chờ sau khi PC gửi D#
   if (waitingAfterPCStop) {
     if (millis() - pcStopTime >= 1000) {
@@ -315,7 +319,7 @@ void handleHarvestSequence() {
         Serial.print(nano1Buffer);
         Serial.println("'");
         
-        if (nano1Buffer == "DONE") {
+        if (nano1Buffer.indexOf("DONE") >= 0) {
           Serial.println("[HARVEST] Nano_1 reached target - Starting CUT");
           harvestState = HARVEST_CUT;
           
@@ -355,7 +359,7 @@ void handleHarvestSequence() {
         Serial.print(nano1Buffer);
         Serial.println("'");
         
-        if (nano1Buffer == "DONE") {
+        if (nano1Buffer.indexOf("DONE") >= 0) {
           Serial.println("[HARVEST] Reached tray - Releasing strawberry");
           harvestState = HARVEST_RELEASE;
           
@@ -395,6 +399,29 @@ void handleHarvestSequence() {
   }
 }
 
+void updateServoTiming() {
+  // Xử lý servo timing - LUÔN chạy trong loop()
+  unsigned long currentTime = millis();
+  
+  // Kiểm tra xem đã đến lúc di chuyển servo 1 chưa
+  if(servo1Moving && currentTime >= servo1Time) {
+    srv1.write(targetAngle1);
+    servo1Moving = false;
+    Serial.print("Servo 1 -> ");
+    Serial.print(targetAngle1);
+    Serial.println(" deg");
+  }
+  
+  // Kiểm tra xem đã đến lúc di chuyển servo 2 chưa
+  if(servo2Moving && currentTime >= servo2Time) {
+    srv2.write(targetAngle2);
+    servo2Moving = false;
+    Serial.print("Servo 2 -> ");
+    Serial.print(targetAngle2);
+    Serial.println(" deg");
+  }
+}
+
 void performCut() {
   // Cắt dâu - giống như nhấn R1
   // Servo 1 đóng 81° ngay lập tức
@@ -420,7 +447,7 @@ void performRelease() {
   
   targetAngle1 = 170;
   targetAngle2 = 170;
-  servo1Time = currentTime + 1000;
+  servo1Time = currentTime + 500;
   servo2Time = currentTime;
   servo1Moving = true;
   servo2Moving = false;
@@ -463,24 +490,6 @@ void handleServo() {
     Serial.println("R2: Servo 2 -> 180 deg (ngay), Servo 1 cho 1s");
   }
   lastR2 = ps2x.Button(PSB_R2);
-  
-  // Kiểm tra xem đã đến lúc di chuyển servo 1 chưa
-  if(servo1Moving && currentTime >= servo1Time) {
-    srv1.write(targetAngle1);
-    servo1Moving = false;
-    Serial.print("Servo 1 -> ");
-    Serial.print(targetAngle1);
-    Serial.println(" deg");
-  }
-  
-  // Kiểm tra xem đã đến lúc di chuyển servo 2 chưa
-  if(servo2Moving && currentTime >= servo2Time) {
-    srv2.write(targetAngle2);
-    servo2Moving = false;
-    Serial.print("Servo 2 -> ");
-    Serial.print(targetAngle2);
-    Serial.println(" deg");
-  }
 }
 
 void read_PS2() {

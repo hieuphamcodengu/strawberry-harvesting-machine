@@ -62,6 +62,8 @@ class StrawberryDetectorApp:
         self.coord_send_time = 0        # Thời điểm gửi D# để delay 1s
         self.coord_to_send = None       # Tọa độ từ detection (để hiển thị)
         self.saved_coord_for_auto = None  # Tọa độ đã save từ input để gửi auto
+        self.last_debug_time = 0        # Thời điểm in debug lần cuối (throttle spam)
+        self.last_detected_coords = None  # Lưu tọa độ phát hiện cuối (X, Y, Z) cho test cut
         
         # Config file
         self.config_file = "strawberry_config.txt"
@@ -480,16 +482,42 @@ class StrawberryDetectorApp:
         
         self.serial_window = tk.Toplevel(self.root)
         self.serial_window.title("📡 Serial Control - ESP32 Communication")
-        self.serial_window.geometry("600x500")
+        self.serial_window.geometry("600x700")
         self.serial_window.configure(bg='#2b2b2b')
         
+        # Tạo Canvas và Scrollbar cho toàn bộ cửa sổ
+        main_canvas = tk.Canvas(self.serial_window, bg='#2b2b2b', highlightthickness=0)
+        main_scrollbar = tk.Scrollbar(self.serial_window, orient="vertical", command=main_canvas.yview)
+        scrollable_frame = tk.Frame(main_canvas, bg='#2b2b2b')
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: main_canvas.configure(scrollregion=main_canvas.bbox("all"))
+        )
+        
+        main_canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        main_canvas.configure(yscrollcommand=main_scrollbar.set)
+        
+        # Pack canvas và scrollbar
+        main_canvas.pack(side="left", fill="both", expand=True)
+        main_scrollbar.pack(side="right", fill="y")
+        
+        # Bind mousewheel CHỈ cho cửa sổ serial này
+        def on_mousewheel(event):
+            main_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        
+        # Bind vào serial_window thay vì bind_all
+        self.serial_window.bind("<MouseWheel>", on_mousewheel)
+        main_canvas.bind("<Enter>", lambda e: self.serial_window.bind("<MouseWheel>", on_mousewheel))
+        main_canvas.bind("<Leave>", lambda e: self.serial_window.unbind("<MouseWheel>"))
+        
         # Title
-        title = tk.Label(self.serial_window, text="📡 ESP32 SERIAL CONTROL",
+        title = tk.Label(scrollable_frame, text="📡 ESP32 SERIAL CONTROL",
                         font=('Arial', 14, 'bold'), bg='#2b2b2b', fg='#00ff00')
         title.pack(pady=10)
         
         # Connection frame
-        conn_frame = tk.LabelFrame(self.serial_window, text="Connection Settings",
+        conn_frame = tk.LabelFrame(scrollable_frame, text="Connection Settings",
                                   font=('Arial', 10, 'bold'), bg='#1e1e1e', fg='#ffffff')
         conn_frame.pack(pady=10, padx=20, fill=tk.X)
         
@@ -540,7 +568,7 @@ class StrawberryDetectorApp:
         self.disconnect_btn.pack(side=tk.LEFT, padx=5, expand=True, fill=tk.X)
         
         # Test commands frame
-        test_frame = tk.LabelFrame(self.serial_window, text="Test Commands",
+        test_frame = tk.LabelFrame(scrollable_frame, text="Test Commands",
                                   font=('Arial', 10, 'bold'), bg='#1e1e1e', fg='#ffffff')
         test_frame.pack(pady=10, padx=20, fill=tk.X)
         
@@ -556,7 +584,7 @@ class StrawberryDetectorApp:
                  cursor='hand2', width=12).pack(side=tk.LEFT, padx=5)
         
         # Coordinate input frame
-        coord_frame = tk.LabelFrame(self.serial_window, text="📍 Manual Coordinate Send",
+        coord_frame = tk.LabelFrame(scrollable_frame, text="📍 Manual Coordinate Send",
                                    font=('Arial', 10, 'bold'), bg='#1e1e1e', fg='#ffffff')
         coord_frame.pack(pady=10, padx=20, fill=tk.X)
         
@@ -630,8 +658,21 @@ class StrawberryDetectorApp:
                                       cursor='hand2', width=15, state=tk.DISABLED)
         self.stop_test_btn.pack(side=tk.LEFT, padx=5)
         
+        # Test cut button
+        tk.Label(test_mode_frame, text="", bg='#1e1e1e').pack(pady=2)  # Spacer
+        tk.Label(test_mode_frame, 
+                text="🔪 Test Strawberry Cutting (no wheel movement)",
+                font=('Arial', 8), bg='#1e1e1e', fg='#ffaa00').pack(pady=2)
+        
+        self.test_cut_btn = tk.Button(test_mode_frame, text="🍓 TEST CUT STRAWBERRY",
+                                     command=self.test_cut_strawberry,
+                                     font=('Arial', 10, 'bold'),
+                                     bg='#ff6600', fg='white',
+                                     cursor='hand2', width=25)
+        self.test_cut_btn.pack(pady=10)
+        
         # Debug log frame
-        log_frame = tk.LabelFrame(self.serial_window, text="📋 Debug Log",
+        log_frame = tk.LabelFrame(scrollable_frame, text="📋 Debug Log",
                                  font=('Arial', 10, 'bold'), bg='#1e1e1e', fg='#ffffff')
         log_frame.pack(pady=10, padx=20, fill=tk.BOTH, expand=True)
         
@@ -643,6 +684,14 @@ class StrawberryDetectorApp:
                                font=('Consolas', 9), yscrollcommand=log_scroll.set)
         self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
         log_scroll.config(command=self.log_text.yview)
+        
+        # Bind mousewheel để cuộn chuột
+        def on_mousewheel(event):
+            self.log_text.yview_scroll(int(-1*(event.delta/120)), "units")
+        
+        self.log_text.bind("<MouseWheel>", on_mousewheel)
+        self.log_text.bind("<Button-4>", lambda e: self.log_text.yview_scroll(-1, "units"))  # Linux scroll up
+        self.log_text.bind("<Button-5>", lambda e: self.log_text.yview_scroll(1, "units"))   # Linux scroll down
         
         # Clear log button
         tk.Button(log_frame, text="🗑️ Clear Log", command=self.clear_log,
@@ -831,6 +880,29 @@ class StrawberryDetectorApp:
         if self.serial_port and self.serial_port.is_open:
             self.send_command("D#")
     
+    def test_cut_strawberry(self):
+        """Test cắt dâu từ tọa độ phát hiện (không di chuyển bánh xe)"""
+        if not self.serial_connected or not self.serial_port:
+            self.log_message("[ERROR] Not connected! Click CONNECT first.", "red")
+            return
+        
+        if self.last_detected_coords is None:
+            self.log_message("[ERROR] No strawberry detected! Run camera first.", "red")
+            return
+        
+        X, Y, Z = self.last_detected_coords
+        # Chuyển đổi tọa độ camera → tool (tính từ vị trí mặc định Z=100mm, Y=10mm)
+        # Y_cam (cm) → Z_tool (mm): Y*10 + 100 (offset) + 100 (default) = Y*10 + 200
+        # Z_cam (cm) → Y_tool (mm): Z*10 - 20 (offset cắt)
+        Z_tool = int(Y * 10 + 200)  # Y của dâu → Z của tool (tuyệt đối)
+        Y_tool = int(Z * 10 - 40)   # Z của dâu → Y của tool (tuyệt đối)
+        
+        coord_cmd = f"G{Z_tool},{Y_tool}#"
+        self.send_command(coord_cmd)
+        self.log_message(f"[TEST CUT] Berry coords: X={X:.1f}, Y={Y:.1f}, Z={Z:.1f}cm", "cyan")
+        self.log_message(f"[TEST CUT] Tool coords sent: Z={Z_tool}mm, Y={Y_tool}mm", "yellow")
+        self.log_message(f"[TEST CUT] Sequence: Move→Cut→Tray(Y=10)→Release→Wait(100,10)", "green")
+    
     def calibrate_camera(self):
         """Calibrate focal length using current detected object"""
         if hasattr(self, 'last_pixel_width') and self.last_pixel_width > 0:
@@ -905,13 +977,19 @@ class StrawberryDetectorApp:
         
         if self.is_running:
             self.start_button.config(text="⏸ STOP DETECTION", bg='#aa0000', activebackground='#ff0000')
-            self.status_label.config(text="Status: RUNNING", fg='#00ff00')
+            self.status_label.config(text="Status: Opening camera...", fg='#ffaa00')
             
-            # Mở camera
-            if self.cap is None or not self.cap.isOpened():
-                self.cap = cv2.VideoCapture(self.current_camera)
-                self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+            # Mở camera trong thread để không block UI
+            def open_camera():
+                if self.cap is None or not self.cap.isOpened():
+                    self.cap = cv2.VideoCapture(self.current_camera)
+                    self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                    self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                    # Đọc 1 frame để "warm up" camera
+                    self.cap.read()
+                self.root.after(0, lambda: self.status_label.config(text="Status: RUNNING", fg='#00ff00'))
+            
+            threading.Thread(target=open_camera, daemon=True).start()
         else:
             self.start_button.config(text="▶ START DETECTION", bg='#00aa00', activebackground='#00ff00')
             self.status_label.config(text="Status: STOPPED", fg='#ff4444')
@@ -995,6 +1073,38 @@ class StrawberryDetectorApp:
                                 (0, 255, 0), -1)
                     cv2.addWeighted(overlay, 0.1, frame, 0.9, 0, frame)
                 
+                # Vẽ trục tọa độ X, Y (mảnh, màu trắng)
+                center_x = self.image_width // 2
+                center_y = self.image_height // 2
+                
+                # Trục X (ngang) - qua tâm
+                cv2.line(frame, (0, center_y), (self.image_width, center_y), (255, 255, 255), 1)
+                # Mũi tên X
+                cv2.arrowedLine(frame, (self.image_width - 30, center_y), 
+                              (self.image_width - 10, center_y), (255, 255, 255), 1, tipLength=0.3)
+                cv2.putText(frame, "X", (self.image_width - 25, center_y - 10),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                
+                # Trục Y (dọc) - qua tâm
+                cv2.line(frame, (center_x, 0), (center_x, self.image_height), (255, 255, 255), 1)
+                # Mũi tên Y
+                cv2.arrowedLine(frame, (center_x, 30), (center_x, 10), (255, 255, 255), 1, tipLength=0.3)
+                cv2.putText(frame, "Y", (center_x + 10, 25),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                
+                # Vẽ vạch chia độ (mỗi 50 pixel)
+                for i in range(0, self.image_width, 50):
+                    if i != center_x:
+                        cv2.line(frame, (i, center_y - 3), (i, center_y + 3), (255, 255, 255), 1)
+                for i in range(0, self.image_height, 50):
+                    if i != center_y:
+                        cv2.line(frame, (center_x - 3, i), (center_x + 3, i), (255, 255, 255), 1)
+                
+                # Gốc tọa độ (0,0)
+                cv2.circle(frame, (center_x, center_y), 3, (255, 255, 255), -1)
+                cv2.putText(frame, "O", (center_x - 15, center_y + 20),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+                
                 # Biến check xem có dâu trong zone không
                 target_in_zone = False
                 
@@ -1049,6 +1159,9 @@ class StrawberryDetectorApp:
                             # Tính tọa độ 3D
                             X, Y, Z = self.calculate_3d_coordinates(center_x, center_y, distance)
                             
+                            # Lưu tọa độ cuối cùng cho test cut
+                            self.last_detected_coords = (X, Y, Z)
+                            
                             # Vẽ tọa độ bên dưới box (2 dòng)
                             coord_text1 = f"X:{X:+.1f} Y:{Y:+.1f}"
                             coord_text2 = f"Z:{Z:.1f}cm"
@@ -1076,13 +1189,16 @@ class StrawberryDetectorApp:
                                   cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 1)  # Viền trắng
                 
                 # Auto stop nếu có dâu trong zone (chỉ trong test mode)
-                # Debug: In ra các điều kiện
+                # Debug: In ra các điều kiện (1s/lần)
                 if target_in_zone:
-                    print(f"[DEBUG] Target in zone detected!")
-                    print(f"  auto_stop_enabled: {self.auto_stop_enabled}")
-                    print(f"  test_mode_active: {self.test_mode_active}")
-                    print(f"  auto_stop_sent: {self.auto_stop_sent}")
-                    print(f"  serial_connected: {self.serial_connected}")
+                    current_time = time.time()
+                    if current_time - self.last_debug_time >= 1.0:  # Chỉ in 1s 1 lần
+                        print(f"[DEBUG] Target in zone detected!")
+                        print(f"  auto_stop_enabled: {self.auto_stop_enabled}")
+                        print(f"  test_mode_active: {self.test_mode_active}")
+                        print(f"  auto_stop_sent: {self.auto_stop_sent}")
+                        print(f"  serial_connected: {self.serial_connected}")
+                        self.last_debug_time = current_time
                 
                 if self.auto_stop_enabled and target_in_zone and self.test_mode_active:
                     if not self.auto_stop_sent:  # Chỉ gửi 1 lần
@@ -1095,14 +1211,15 @@ class StrawberryDetectorApp:
                             self.stop_test_btn.config(state=tk.DISABLED)
                             self.log_message("[AUTO STOP] Target in zone - Sent D#", "yellow")
                             
-                            # Lưu thời điểm để gửi tọa độ sau 1s
+                            # Lưu thời điểm để gọi test_cut_strawberry sau 1s
                             self.coord_send_time = time.time()
-                            # Ghi log tọa độ sẽ gửi (từ saved_coord_for_auto)
-                            if self.saved_coord_for_auto:
-                                z_val, y_val = self.saved_coord_for_auto
-                                print(f"[DEBUG] Will send SAVED coordinates after 1s: Z={z_val:.1f}, Y={y_val:.1f}")
+                            
+                            # Log: sẽ tự động gọi hàm cắt dâu sau 1s
+                            if self.last_detected_coords:
+                                X, Y, Z = self.last_detected_coords
+                                print(f"[DEBUG] Will auto-cut strawberry after 1s: Berry coords X={X:.1f}, Y={Y:.1f}, Z={Z:.1f}cm")
                             else:
-                                print("[DEBUG] No saved coordinates - will NOT send coord after 1s")
+                                print("[DEBUG] No detected coordinates - will NOT auto-cut")
                             
                             print("[DEBUG] D# sent successfully!")
                         else:
@@ -1118,18 +1235,19 @@ class StrawberryDetectorApp:
                 self.total_objects = len(results[0].boxes) if len(results) > 0 else 0
                 self.current_frame = frame.copy()
                 
-                # Kiểm tra xem đã đến lúc gửi tọa độ chưa (sau 1s kể từ D#)
-                if self.saved_coord_for_auto is not None and self.coord_send_time > 0:
+                # Kiểm tra xem đã đến lúc tự động cắt dâu chưa (sau 1s kể từ D#)
+                if self.coord_send_time > 0:
                     if time.time() - self.coord_send_time >= 1.0:
-                        # Gửi lệnh tọa độ Gz,y# (từ saved_coord_for_auto)
-                        z_val, y_val = self.saved_coord_for_auto
-                        coord_cmd = f"G{z_val:.1f},{y_val:.1f}#"
-                        self.send_command(coord_cmd)
-                        self.log_message(f"[AUTO COORD] Sent saved coord: {coord_cmd}", "cyan")
-                        print(f"[DEBUG] Coordinate command sent: {coord_cmd}")
+                        # Tự động gọi test_cut_strawberry() để cắt dâu
+                        if self.last_detected_coords:
+                            print("[AUTO CUT] 1s elapsed - Auto-cutting strawberry...")
+                            self.log_message("[AUTO CUT] Starting harvest sequence...", "green")
+                            self.test_cut_strawberry()
+                        else:
+                            print("[AUTO CUT] No coordinates detected - skipping")
+                            self.log_message("[AUTO CUT] No strawberry coords - skipped", "red")
                         
                         # Reset
-                        self.coord_to_send = None
                         self.coord_send_time = 0
                 
                 # Tính FPS

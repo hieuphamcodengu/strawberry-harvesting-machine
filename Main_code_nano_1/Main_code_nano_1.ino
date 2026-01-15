@@ -91,7 +91,7 @@ float currentAccel2 = 3;   // Gia tốc Motor 2 (mm/s^2)
 
 // ===== GIỚI HẠN HÀNH TRÌNH (mm) =====
 // Thay đổi các giá trị này theo hành trình thực tế của máy
-const float MAX_Z = 200.0;  // Hành trình tối đa trục Z (Motor 2) - mm
+const float MAX_Z = 150.0;  // Hành trình tối đa trục Z (Motor 2) - mm
 const float MAX_Y = 300.0;  // Hành trình tối đa trục Y (Motor 1) - mm
 
 // ===== KHOẢNG CÁCH MỖI LẦN DI CHUYỂN REALTIME (mm) =====
@@ -246,8 +246,7 @@ void loop() {
     
     // Kiểm tra nếu cần gửi DONE# và không có motor nào đang chạy
     if (needSendDone && !isMoving1 && !isPending1) {
-      Serial.println("DONE#");  // Gửi về ESP32
-      mySerial.println("DONE#"); // Gửi qua SoftwareSerial
+      mySerial.println("DONE#"); // Gửi qua SoftwareSerial tới ESP32
       needSendDone = false;
       Serial.println(F("[INFO] Sent DONE# to ESP32 (after Motor 2)"));
     }
@@ -272,8 +271,7 @@ void loop() {
       
       // Kiểm tra nếu cả 2 motor đã xong và cần gửi DONE#
       if (needSendDone && !isMoving2 && !isPending1) {
-        Serial.println("DONE#");  // Gửi về ESP32
-        mySerial.println("DONE#"); // Gửi qua SoftwareSerial
+        mySerial.println("DONE#"); // Gửi qua SoftwareSerial tới ESP32
         needSendDone = false;
         Serial.println(F("[INFO] Sent DONE# to ESP32"));
       }
@@ -321,10 +319,10 @@ void performHoming() {
   }
   stepper2.stop();
   stepper2.setCurrentPosition(stepper2.currentPosition()); // Dừng ngay
-  delay(100);
+  delay(500);
   
   // Lùi ra 1 chút
-  stepper2.move(10 * STEPS_PER_MM_2);
+  stepper2.move(5 * STEPS_PER_MM_2);
   while(stepper2.distanceToGo() != 0) {
     stepper2.run();
   }
@@ -333,7 +331,7 @@ void performHoming() {
   stepper2.setCurrentPosition(0);
   currentZ = 0;
   Serial.println(F("[Truc Z] Home thanh cong!"));
-  
+  delay(500);
   // Nâng Z lên toạ độ 100mm sau khi home
   Serial.println(F("[Truc Z] Nang len 100mm..."));
   stepper2.moveTo(100 * STEPS_PER_MM_2);

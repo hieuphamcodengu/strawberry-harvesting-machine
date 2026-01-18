@@ -42,11 +42,17 @@ float v2Prev_M2 = 0;
 
 float eintegral_M2 = 0;
 
+// Biến lưu thông tin điều khiển hiện tại (dùng cho getRampRate)
+int current_dir_L = 0;
+int current_target_L = 0;
+int current_dir_R = 0;
+int current_target_R = 0;
+
 // Thông số PID và Ramping (có thể điều chỉnh)
 float kp = 2;        // Hệ số tỷ lệ
 float ki = 1.7;        // Hệ số tích phân
 float kd = 0.1;       // Hệ số đạo hàm
-float rampRate = 30.0; // RPM/giây - tốc độ tăng target
+float rampRate = 30.0; // RPM/giây - tốc độ tăng target (mặc định)
 
 void setup_motor() {
   // Cấu hình chân điều khiển động cơ
@@ -66,11 +72,52 @@ void setup_motor() {
   attachInterrupt(digitalPinToInterrupt(ENCB), readEncoder_M2, RISING);
 }
 
+// Hàm xác định rampRate dựa trên chế độ chuyển động
+float getRampRate() {
+  // Kiểm tra xe đang đi tiến/lùi hay quay
+  // Tiến/lùi: 2 bánh cùng chiều và có tốc độ
+  // Quay: 2 bánh ngược chiều hoặc 1 bánh đứng yên
+  
+  bool bothMoving = (current_target_L > 0 && current_target_R > 0);
+  bool sameDirection = (current_dir_L == current_dir_R);
+  
+  // Nếu cả 2 bánh chuyển động cùng chiều → đi tiến/lùi
+  if (bothMoving && sameDirection && current_dir_L != 0) {
+    return 2.0;  // RampRate thấp cho tiến/lùi (mượt hơn)
+  }
+  // Nếu 2 bánh ngược chiều hoặc chỉ 1 bánh chạy → quay
+  else if (bothMoving && !sameDirection) {
+    return 80.0; // RampRate cao cho quay (nhanh hơn)
+  }
+  // Trường hợp chỉ 1 bánh chạy (quay tại chỗ)
+  else if ((current_target_L > 0 && current_target_R == 0) || 
+           (current_target_L == 0 && current_target_R > 0)) {
+    return 80.0; // RampRate cao cho quay
+  }
+  
+  // Mặc định
+  return 10.0;
+}
+
+// Hàm xác định PWM tối đa dựa trên chế độ chuyển động
+int getMaxPWM() {
+  // Kiểm tra xe đang đi tiến/lùi hay quay
+  bool bothMoving = (current_target_L > 0 && current_target_R > 0);
+  bool sameDirection = (current_dir_L == current_dir_R);
+  
+  // Nếu cả 2 bánh chuyển động cùng chiều → đi tiến/lùi
+  if (bothMoving && sameDirection && current_dir_L != 0) {
+    return 100;  // PWM thấp hơn cho tiến/lùi (an toàn hơn)
+  }
+  // Các trường hợp khác (quay, dừng) → PWM cao
+  else {
+    return 255;  // PWM tối đa cho quay (linh hoạt hơn)
+  }
+}
 
 void M1(float target) {
   // Soft-start: tăng target dần dần để tránh vọt
   static float smoothTarget_M1 = 0;
-  float rampRate = 40.0; // RPM/giây - tăng để bắt target nhanh hơn
   
   // read the position in an atomic block
   // to avoid potential misreads
@@ -88,8 +135,9 @@ void M1(float target) {
   posPrev_M1 = pos;
   prevT_M1 = currT;
   
-  // Ramping: tăng dần target
-  float maxChange = rampRate * deltaT;
+  // Ramping: tăng dần target với rampRate động
+  float currentRampRate = getRampRate();
+  float maxChange = currentRampRate * deltaT;
   if (target > smoothTarget_M1) {
     smoothTarget_M1 += min(maxChange, target - smoothTarget_M1);
   } else if (target < smoothTarget_M1) {
@@ -124,10 +172,11 @@ void M1(float target) {
   float u = kp * e + ki * eintegral_M1 + kd * e_derivative;
   e_prev_M1 = e;  // Cập nhật e_prev cho lần tính toán sau
 
-  // Set the motor speed and direction
+  // Set the motor speed and direction với giới hạn PWM động
+  int maxPWM = getMaxPWM();
   int pwr = (int)fabs(u);
-  if (pwr > 254) {
-    pwr = 254;
+  if (pwr > maxPWM) {
+    pwr = maxPWM;
   }
   M1_pwm(pwr);
 
@@ -138,7 +187,6 @@ void M1(float target) {
 void M2(float target) {
   // Soft-start: tăng target dần dần để tránh vọt
   static float smoothTarget_M2 = 0;
-  float rampRate = 40.0; // RPM/giây - tăng để bắt target nhanh hơn
   
   // read the position in an atomic block
   // to avoid potential misreads
@@ -156,8 +204,9 @@ void M2(float target) {
   posPrev_M2 = pos;
   prevT_M2 = currT;
   
-  // Ramping: tăng dần target
-  float maxChange = rampRate * deltaT;
+  // Ramping: tăng dần target với rampRate động
+  float currentRampRate = getRampRate();
+  float maxChange = currentRampRate * deltaT;
   if (target > smoothTarget_M2) {
     smoothTarget_M2 += min(maxChange, target - smoothTarget_M2);
   } else if (target < smoothTarget_M2) {
@@ -192,10 +241,11 @@ void M2(float target) {
   float u = kp * e + ki * eintegral_M2 + kd * e_derivative;
   e_prev_M2 = e;  // Cập nhật e_prev cho lần tính toán sau
 
-  // Set the motor speed and direction
+  // Set the motor speed and direction với giới hạn PWM động
+  int maxPWM = getMaxPWM();
   int pwr = (int)fabs(u);
-  if (pwr > 254) {
-    pwr = 254;
+  if (pwr > maxPWM) {
+    pwr = maxPWM;
   }
   M2_pwm(pwr);
   Serial.print(" ");
@@ -245,6 +295,12 @@ void control(int dir_L, int target_L, int dir_R, int target_R) {
   static int prev_target_R = 0;
   static int prev_dir_L = 0;
   static int prev_dir_R = 0;
+  
+  // Lưu thông tin điều khiển hiện tại (để getRampRate() sử dụng)
+  current_dir_L = dir_L;
+  current_target_L = target_L;
+  current_dir_R = dir_R;
+  current_target_R = target_R;
   
   // Control left motor
   if (dir_L == 1) {

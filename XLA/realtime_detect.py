@@ -59,6 +59,7 @@ class StrawberryDetectorApp:
         self.test_mode_active = False  # Test mode: gửi T# liên tục
         self.test_thread = None
         self.auto_stop_sent = False     # Đã gửi D# khi dâu vào zone
+        self.harvesting_in_progress = False  # Đang thực hiện harvest sequence
         self.coord_send_time = 0        # Thời điểm gửi D# để delay 1s
         self.coord_to_send = None       # Tọa độ từ detection (để hiển thị)
         self.saved_coord_for_auto = None  # Tọa độ đã save từ input để gửi auto
@@ -810,6 +811,7 @@ class StrawberryDetectorApp:
                                 # Tự động tiếp tục test mode - reset cờ và gửi T# lại
                                 if self.test_mode_active:
                                     self.log_message("[AUTO] Continuing to next strawberry...", "cyan")
+                                    self.harvesting_in_progress = False  # Reset trạng thái harvest
                                     self.auto_stop_sent = False  # Reset để có thể dừng lại cho quả tiếp theo
                                     # Gửi T# để tiếp tục di chuyển
                                     try:
@@ -929,7 +931,9 @@ class StrawberryDetectorApp:
             
             # Tự động tiếp tục nếu đang trong test mode
             if self.test_mode_active:
+                self.harvesting_in_progress = False  # Reset trạng thái harvest
                 self.auto_stop_sent = False  # Reset để có thể dừng lại cho quả tiếp theo
+                self.coord_send_time = 0     # Reset để không gọi lại test_cut_strawberry
                 self.log_message("[AUTO] Continuing to find next Ripe strawberry...", "green")
                 try:
                     self.serial_port.write("T#".encode())
@@ -950,7 +954,9 @@ class StrawberryDetectorApp:
             
             # Tự động tiếp tục nếu đang trong test mode
             if self.test_mode_active:
+                self.harvesting_in_progress = False  # Reset trạng thái harvest
                 self.auto_stop_sent = False  # Reset để có thể dừng lại cho quả tiếp theo
+                self.coord_send_time = 0     # Reset để không gọi lại test_cut_strawberry
                 self.log_message("[AUTO] Continuing to find reachable strawberry...", "green")
                 try:
                     self.serial_port.write("T#".encode())
@@ -965,7 +971,9 @@ class StrawberryDetectorApp:
             
             # Tự động tiếp tục nếu đang trong test mode
             if self.test_mode_active:
+                self.harvesting_in_progress = False  # Reset trạng thái harvest
                 self.auto_stop_sent = False  # Reset để có thể dừng lại cho quả tiếp theo
+                self.coord_send_time = 0     # Reset để không gọi lại test_cut_strawberry
                 self.log_message("[AUTO] Continuing to find reachable strawberry...", "green")
                 try:
                     self.serial_port.write("T#".encode())
@@ -976,6 +984,7 @@ class StrawberryDetectorApp:
         
         # Tọa độ hợp lệ - gửi lệnh
         coord_cmd = f"G{Z_tool},{Y_tool}#"
+        self.harvesting_in_progress = True  # Đánh dấu đang harvest
         self.send_command(coord_cmd)
         self.log_message(f"[TEST CUT] Berry coords: X={X:.1f}, Y={Y:.1f}, Z={Z:.1f}cm", "cyan")
         self.log_message(f"[TEST CUT] Tool coords sent: Z={Z_tool}mm, Y={Y_tool}mm", "yellow")
@@ -1194,6 +1203,10 @@ class StrawberryDetectorApp:
                 # Biến check xem có dâu trong zone không
                 target_in_zone = False
                 
+                # Thu thập các đối tượng trong zone để sắp xếp theo ID
+                objects_in_zone = []
+                all_boxes_info = []  # Lưu thông tin tất cả các box để vẽ
+                
                 # Vẽ bounding boxes
                 for result in results:
                     boxes = result.boxes
@@ -1211,7 +1224,6 @@ class StrawberryDetectorApp:
                             track_id = int(box.id[0])
                         
                         class_name = self.class_names.get(cls, 'Unknown')
-                        color = self.colors.get(cls, (255, 255, 255))
                         
                         # Tính tâm của bounding box
                         center_x = int((x1 + x2) / 2)
@@ -1219,60 +1231,122 @@ class StrawberryDetectorApp:
                         
                         # Check xem tâm có nằm trong target zone không (theo trục X)
                         in_zone = self.x_line_left <= center_x <= self.x_line_right
-                        if in_zone:
+                        
+                        # Lưu thông tin box
+                        box_info = {
+                            'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2,
+                            'conf': conf, 'cls': cls, 'track_id': track_id,
+                            'class_name': class_name, 'center_x': center_x, 'center_y': center_y,
+                            'in_zone': in_zone
+                        }
+                        all_boxes_info.append(box_info)
+                        
+                        # Nếu trong zone và là Ripe (cls == 0), thêm vào danh sách ưu tiên
+                        if in_zone and cls == 0:
                             target_in_zone = True
-                            # Đổi màu box thành màu cam nếu trong zone
-                            color = (0, 165, 255)  # Orange
-                            print(f"[DEBUG] Object in zone! center_x={center_x}, zone=[{self.x_line_left}, {self.x_line_right}]")
+                            objects_in_zone.append(box_info)
+                
+                # Sắp xếp các đối tượng trong zone theo vị trí Y (quả ở dưới trước - center_y lớn hơn)
+                if objects_in_zone:
+                    objects_in_zone.sort(key=lambda x: -x['center_y'])  # Sort giảm dần theo Y (dưới → trên)
+                    print(f"[PRIORITY] {len(objects_in_zone)} Ripe strawberry(ies) in zone! Processing bottom-to-top:")
+                    for i, obj in enumerate(objects_in_zone):
+                        priority_marker = "🎯 TARGET" if i == 0 else "⏳ QUEUED"
+                        print(f"  {priority_marker} ID:{obj['track_id']} center_y={obj['center_y']} (lower=first)")
+                    
+                    # Lưu tọa độ của quả có ID nhỏ nhất (ưu tiên cao nhất)
+                    target_obj = objects_in_zone[0]
+                else:
+                    # Không có quả Ripe trong zone - clear last_detected_coords để tránh xử lý tọa độ cũ
+                    if target_in_zone == False and self.last_detected_coords:
+                        print("[DEBUG] No Ripe strawberry in zone - Clearing old coordinates")
+                        # Không clear hoàn toàn, vì có thể quả đang ở ngoài zone
+                        # self.last_detected_coords = None
+                    
+                    # Nếu đang test mode và detect được object trong zone nhưng không phải Ripe
+                    # Kiểm tra xem có Unripe trong zone không
+                    unripe_in_zone = any(box['in_zone'] and box['cls'] != 0 for box in all_boxes_info)
+                    if unripe_in_zone and self.test_mode_active:
+                        print("[DEBUG] Unripe strawberry in zone - Skipping and continuing movement")
+                        # Đảm bảo xe không dừng lại
+                        if self.auto_stop_sent:
+                            self.auto_stop_sent = False
+                            print("[DEBUG] Reset auto_stop_sent to allow next detection")
+                
+                # Vẽ tất cả các box
+                for box_info in all_boxes_info:
+                    x1, y1, x2, y2 = box_info['x1'], box_info['y1'], box_info['x2'], box_info['y2']
+                    conf = box_info['conf']
+                    cls = box_info['cls']
+                    track_id = box_info['track_id']
+                    class_name = box_info['class_name']
+                    center_x = box_info['center_x']
+                    center_y = box_info['center_y']
+                    in_zone = box_info['in_zone']
+                    
+                    color = self.colors.get(cls, (255, 255, 255))
+                    
+                    if in_zone:
+                        # Đổi màu box thành màu cam nếu trong zone
+                        color = (0, 165, 255)  # Orange
                         
-                        # Vẽ box với màu đã xác định
-                        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                        # Nếu là target (ID nhỏ nhất trong zone), vẽ viền đậm hơn
+                        if objects_in_zone and box_info == objects_in_zone[0]:
+                            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 4)  # Viền xanh lá đậm
+                            cv2.putText(frame, "NEXT TARGET", (x1, y1 - 30),
+                                      cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                    
+                    # Vẽ box với màu đã xác định
+                    # Vẽ box với màu đã xác định
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                    
+                    # Hiển thị class name, confidence và track ID
+                    label = f"{class_name} {conf:.2f}"
+                    if track_id is not None:
+                        label += f" ID:{track_id}"
+                    cv2.putText(frame, label, (x1, y1 - 10),
+                              cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+                    
+                    # Tính khoảng cách và tọa độ 3D
+                    pixel_width = x2 - x1
+                    self.last_pixel_width = pixel_width  # Lưu để calibrate
+                    
+                    distance = self.calculate_distance(pixel_width)
+                    
+                    if self.show_coordinates and distance > 0:
+                        # Tính tọa độ 3D
+                        X, Y, Z = self.calculate_3d_coordinates(center_x, center_y, distance)
                         
-                        # Hiển thị class name, confidence và track ID
-                        label = f"{class_name} {conf:.2f}"
-                        if track_id is not None:
-                            label += f" ID:{track_id}"
-                        cv2.putText(frame, label, (x1, y1 - 10),
-                                  cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-                        
-                        # Tính khoảng cách và tọa độ 3D
-                        pixel_width = x2 - x1
-                        self.last_pixel_width = pixel_width  # Lưu để calibrate
-                        
-                        distance = self.calculate_distance(pixel_width)
-                        
-                        if self.show_coordinates and distance > 0:
-                            # Tính tọa độ 3D
-                            X, Y, Z = self.calculate_3d_coordinates(center_x, center_y, distance)
-                            
-                            # Lưu tọa độ cuối cùng và class cho test cut
+                        # Chỉ lưu tọa độ của target (ID nhỏ nhất trong zone)
+                        if objects_in_zone and box_info == objects_in_zone[0]:
                             self.last_detected_coords = (X, Y, Z, cls)
-                            
-                            # Vẽ tọa độ bên dưới box (2 dòng)
-                            coord_text1 = f"X:{X:+.1f} Y:{Y:+.1f}"
-                            coord_text2 = f"Z:{Z:.1f}cm"
-                            
-                            # Dòng 1: X, Y
-                            cv2.putText(frame, coord_text1, (x1, y2 + 18),
-                                      cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
-                            # Dòng 2: Z
-                            cv2.putText(frame, coord_text2, (x1, y2 + 38),
-                                      cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
-                        elif self.show_distance and distance > 0:
-                            # Chỉ hiển thị khoảng cách nếu không hiển thị tọa độ
-                            distance_text = f"{distance:.1f}cm"
-                            cv2.putText(frame, distance_text, (center_x - 30, y2 + 20),
-                                      cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+                            print(f"[TARGET COORDS] Saved target ID:{track_id} -> X={X:.1f}, Y={Y:.1f}, Z={Z:.1f}, Class={class_name}")
                         
-                        # Vẽ dấu chấm màu đỏ ở giữa box
-                        cv2.circle(frame, (center_x, center_y), 5, (0, 0, 255), -1)  # Chấm đỏ
-                        cv2.circle(frame, (center_x, center_y), 6, (255, 255, 255), 1)  # Viền trắng
+                        # Vẽ tọa độ bên dưới box (2 dòng)
+                        coord_text1 = f"X:{X:+.1f} Y:{Y:+.1f}"
+                        coord_text2 = f"Z:{Z:.1f}cm"
                         
-                        # Vẽ dấu * ở trên cùng box (giữa theo chiều ngang)
-                        cv2.putText(frame, '*', (center_x - 8, y1 - 10), 
-                                  cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 3)  # Dấu * màu đỏ
-                        cv2.putText(frame, '*', (center_x - 8, y1 - 10), 
-                                  cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 1)  # Viền trắng
+                        # Dòng 1: X, Y
+                        cv2.putText(frame, coord_text1, (x1, y2 + 18),
+                                  cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+                        # Dòng 2: Z
+                        cv2.putText(frame, coord_text2, (x1, y2 + 38),
+                                  cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
+                    elif self.show_distance and distance > 0:
+                        # Chỉ hiển thị khoảng cách nếu không hiển thị tọa độ
+                        distance_text = f"{distance:.1f}cm"
+                        cv2.putText(frame, distance_text, (center_x - 30, y2 + 20),
+                                  cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+                    
+                    # Vẽ dấu chấm màu đỏ ở giữa box
+                    cv2.circle(frame, (center_x, center_y), 5, (0, 0, 255), -1)  # Chấm đỏ
+                    cv2.circle(frame, (center_x, center_y), 6, (255, 255, 255), 1)  # Viền trắng
+                    
+                    # Vẽ dấu * ở trên cùng box (giữa theo chiều ngang)
+                    cv2.putText(frame, '*', (center_x - 8, y1 - 10), 
+                              cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 3)  # Dấu * màu đỏ
+                    cv2.putText(frame, '*', (center_x - 8, y1 - 10), 
+                              cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 1)  # Viền trắng
                 
                 # Auto stop nếu có dâu trong zone (chỉ trong test mode)
                 # Debug: In ra các điều kiện (1s/lần)
@@ -1287,11 +1361,12 @@ class StrawberryDetectorApp:
                         self.last_debug_time = current_time
                 
                 if self.auto_stop_enabled and target_in_zone and self.test_mode_active:
-                    if not self.auto_stop_sent:  # Chỉ gửi 1 lần
+                    if not self.auto_stop_sent and not self.harvesting_in_progress:  # Chỉ gửi 1 lần và không đang harvest
                         if self.serial_connected and self.serial_port:
                             print("[DEBUG] Sending D# command...")
                             self.send_command("D#")  # Gửi lệnh dừng
                             self.auto_stop_sent = True  # Đánh dấu đã gửi
+                            self.harvesting_in_progress = True  # Đánh dấu bắt đầu harvest sequence
                             # KHÔNG TẮT test_mode_active - để tiếp tục thu hoạch sau HARVEST_DONE#
                             self.log_message("[AUTO STOP] Target in zone - Sent D#", "yellow")
                             
@@ -1315,6 +1390,14 @@ class StrawberryDetectorApp:
                     # Hiển thị thông báo
                     cv2.putText(frame, "TARGET IN ZONE - STOPPED", (150, 50),
                                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 3)
+                elif self.test_mode_active and not target_in_zone:
+                    # Đang trong test mode nhưng KHÔNG có quả Ripe trong zone
+                    # Đảm bảo xe vẫn di chuyển (không bị dừng)
+                    if self.auto_stop_sent:
+                        # Nếu trước đó đã gửi D# (có quả Ripe) nhưng giờ không còn
+                        # Reset để xe tiếp tục đi
+                        print("[DEBUG] No Ripe in zone - Ensuring movement continues")
+                        self.auto_stop_sent = False
                 
                 # Cập nhật thông tin
                 self.total_objects = len(results[0].boxes) if len(results) > 0 else 0

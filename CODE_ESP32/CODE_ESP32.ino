@@ -49,6 +49,10 @@ int targetAngle2 = 90;         // Góc mục tiêu servo 2
 bool lastR1 = false;           // Trạng thái nút R1 trước
 bool lastR2 = false;           // Trạng thái nút R2 trước
 
+// Biến cho khởi động mượt PC control
+unsigned long pcControlStartTime = 0;  // Thời điểm bắt đầu PC control
+int pcControlPhase = 0;                // 0=chưa bắt đầu, 1-5=các phase khởi động
+
 // Biến cho stepper realtime control
 int lastCmdZ = 0;              // Lệnh Z trước đó
 int lastCmdY = 0;              // Lệnh Y trước đó
@@ -197,7 +201,6 @@ void readPCCommand() {
       }
     }
   }
-  
   // Xử lý lệnh khi nhận đủ
   if (pcCommandReady) {
     pcCommandBuffer.trim();
@@ -210,8 +213,10 @@ void readPCCommand() {
       // Lệnh TIEN - bật PC control mode
       pcControlActive = true;
       waitingAfterPCStop = false;
+      pcControlStartTime = millis();  // Lưu thời điểm bắt đầu
+      pcControlPhase = 1;              // Bắt đầu phase 1: initial forward
       
-      Serial.println("[PC] TIEN mode activated - PS2 disabled, continuous forward");
+      Serial.println("[PC] TIEN mode activated - PS2 disabled, starting smooth ramp-up");
       
     } else if (pcCommandBuffer == "D") {
       // Lệnh DUNG - tắt PC control mode và gửi dừng
@@ -229,6 +234,19 @@ void readPCCommand() {
       
     } else if (pcCommandBuffer.startsWith("G")) {
       // Lệnh tọa độ Gz,y# - chuyển tiếp xuống Nano_1 và bắt đầu harvest sequence
+      
+      // KIỂM TRA: Chỉ chấp nhận lệnh G# khi KHÔNG đang harvest
+      if (harvestState != HARVEST_IDLE) {
+        Serial.println("[PC] ERROR: Cannot start new harvest - Already harvesting!");
+        Serial.print("[PC] Current state: ");
+        Serial.println(harvestState);
+        
+        // Reset buffer nhưng không xử lý
+        pcCommandBuffer = "";
+        pcCommandReady = false;
+        return;  // Bỏ qua lệnh này
+      }
+      
       String coordStr = pcCommandBuffer.substring(1);  // Bỏ chữ "G"
       
       // Parse Z và Y
@@ -550,14 +568,14 @@ void read_PS2() {
     digitalWrite(DC_MOTOR_IN1, LOW );
     digitalWrite(DC_MOTOR_IN2, HIGH);
     analogWrite(DC_MOTOR_PWM, 130);
-    Serial.println("[DC Motor] Quay thuan - PWM=100");
+    //Serial.println("[DC Motor] Quay thuan - PWM=100");
   }
   // PSB_L2: Dừng quay
   else if(ps2x.Button(PSB_L2)) {
     digitalWrite(DC_MOTOR_IN1, LOW);
     digitalWrite(DC_MOTOR_IN2, LOW);
     analogWrite(DC_MOTOR_PWM, 0);
-    Serial.println("[DC Motor] Dung");
+  //  Serial.println("[DC Motor] Dung");
   }
   
   // Kiểm tra nút START để gửi lệnh HOME
@@ -662,9 +680,68 @@ void read_PS2() {
   // ===== GỬI LỆNH XUỐNG NANO =====
   // Nếu PC control active hoặc đang chờ sau PC stop, không gửi lệnh từ PS2
   if (pcControlActive) {
-    // PC đang điều khiển - gửi lệnh tiến liên tục
-    String wheelString = "1,11,1,11#";  // Tiến, RPM=20
-    Serial2.print(wheelString);
+    // PC đang điều khiển - xử lý theo 5 phase để khởi động mượt
+    unsigned long elapsedTime = millis() - pcControlStartTime;
+    String wheelString = "";
+    
+    if (pcControlPhase == 1) {
+      // Phase 1: Gửi forward trong 100ms
+      wheelString = "1,10,1,10#";
+      Serial2.print(wheelString);
+      
+      if (elapsedTime >= 100) {
+        pcControlStartTime = millis();  // Reset timer
+        pcControlPhase = 2;
+        Serial.println("[PC] Phase 1 done (100ms) - Starting Phase 2");
+      }
+    }
+    else if (pcControlPhase == 2) {
+      // Phase 2: Gửi stop liên tục trong 150ms
+      wheelString = "0,0,0,0#";
+      Serial2.print(wheelString);
+      
+      if (elapsedTime >= 150) {
+        pcControlStartTime = millis();  // Reset timer
+        pcControlPhase = 3;
+        Serial.println("[PC] Phase 2 done (150ms) - Starting Phase 3");
+      }
+    }
+    else if (pcControlPhase == 3) {
+      // Phase 3: Gửi forward trong 100ms
+      wheelString = "1,10,1,10#";
+      Serial2.print(wheelString);
+      
+      if (elapsedTime >= 100) {
+        pcControlPhase = 4;
+        Serial.println("[PC] Phase 3 done (100ms) - Starting Phase 4");
+      }
+    }
+    else if (pcControlPhase == 4) {
+      // Phase 4: Gửi stop 1 lần duy nhất, chờ 100ms
+      static bool phase4StopSent = false;
+      
+      if (!phase4StopSent) {
+        // Chỉ gửi stop 1 lần duy nhất
+        wheelString = "0,0,0,0#";
+        Serial2.print(wheelString);
+        Serial.println("[PC] Phase 4 - Stop sent once, waiting 100ms");
+        pcControlStartTime = millis();  // Reset timer để đếm 100ms
+        phase4StopSent = true;
+      }
+      
+      if (elapsedTime >= 100) {
+        pcControlPhase = 5;
+        phase4StopSent = false;  // Reset cho lần sau
+        Serial.println("[PC] Phase 4 done (100ms) - Starting Phase 5 continuous");
+      }
+      // Không gửi gì trong 100ms chờ
+    }
+    else {
+      // Phase 5: Gửi lệnh tiến liên tục bình thường
+      wheelString = "1,10,1,10#";
+      Serial2.print(wheelString);
+    }
+    
     // Không gửi lệnh stepper
     delay(50);
     return;

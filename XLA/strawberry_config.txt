@@ -1,6 +1,6 @@
 {
     "real_width": 3.0,
     "focal_length": 330.0,
-    "x_line_left": 250,
-    "x_line_right": 380
+    "x_line_left": 260,
+    "x_line_right": 370
 }
